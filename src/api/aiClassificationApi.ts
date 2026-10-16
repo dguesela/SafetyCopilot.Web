@@ -22,12 +22,14 @@ export async function runAiClassification(
 
 export async function getAiClassificationResults(
   projectId: string,
-  userId: string
+  userId: string,
+  options?: { signal?: AbortSignal; timeout?: number }
 ): Promise<AiClassificationResults> {
   const response =
     await apiClient.get<AiClassificationResults>(
       `/projects/${projectId}/ai-classifications`,
       {
+        ...options,
         params: {
           userId
         }

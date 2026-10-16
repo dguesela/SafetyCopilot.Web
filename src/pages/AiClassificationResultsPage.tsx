@@ -1,3 +1,5 @@
+import { isAxiosError } from "axios";
+
 import {
   ArrowLeft,
   Brain,
@@ -23,6 +25,10 @@ import {
   getAiClassificationResults
 } from "../api/aiClassificationApi";
 
+import "./AiClassificationResultsPage.css";
+
+import { useAuth } from "../contexts/AuthContext";
+
 import type {
   AiClassificationDetails,
   AiClassificationResults
@@ -41,6 +47,9 @@ export default function AiClassificationResultsPage() {
 
   const navigate =
     useNavigate();
+
+  const { user, initializing } = useAuth();
+  const userId = user?.id;
 
   const [
     data,
@@ -74,72 +83,65 @@ export default function AiClassificationResultsPage() {
 
   useEffect(
     () => {
-      loadResults();
+      if (initializing) {
+        return;
+      }
+
+      let cancelled = false;
+      void loadResults();
+
+      async function loadResults() {
+        setData(null);
+
+        if (!projectId || !userId) {
+          setError(
+            !projectId
+              ? "Project ID was not provided."
+              : "The current user could not be identified."
+          );
+          setLoading(false);
+          return;
+        }
+
+        try {
+          setLoading(true);
+          setError(null);
+
+          const result = await getAiClassificationResults(projectId, userId);
+
+          if (!cancelled) {
+            setData(result);
+          }
+        } catch (err: unknown) {
+          console.error(err);
+
+          if (!cancelled) {
+            const message = isAxiosError(err)
+              ? err.response?.data?.message
+              : undefined;
+            setError(
+              typeof message === "string"
+                ? message
+                : "Unable to load AI classification results."
+            );
+          }
+        } finally {
+          if (!cancelled) {
+            setLoading(false);
+          }
+        }
+      }
+
+      return () => {
+        cancelled = true;
+      };
     },
     [
-      projectId
+      projectId,
+      userId,
+      initializing
     ]
   );
-
-  async function loadResults() {
-    if (!projectId) {
-      setError(
-        "Project ID was not provided."
-      );
-
-      setLoading(false);
-
-      return;
-    }
-
-    /*
-     * Change this key if your application
-     * stores the user ID under another name.
-     */
-    const userId =
-      localStorage.getItem(
-        "userId"
-      );
-
-    if (!userId) {
-      setError(
-        "The current user could not be identified."
-      );
-
-      setLoading(false);
-
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError(null);
-
-      const result =
-        await getAiClassificationResults(
-          projectId,
-          userId
-        );
-
-      setData(
-        result
-      );
-    } catch (err: any) {
-      console.error(
-        err
-      );
-
-      const message =
-        err?.response?.data?.message ??
-        "Unable to load AI classification results.";
-
-      setError(
-        message
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
 
   const filteredResults =
     useMemo(
@@ -200,10 +202,10 @@ export default function AiClassificationResultsPage() {
     );
   }
 
-  if (loading) {
+  if (initializing || loading) {
     return (
-      <div className="page-container">
-        <div className="page-card">
+      <div className="page-container ai-results-page">
+        <div className="ai-results-panel">
           Loading AI classification results...
         </div>
       </div>
@@ -212,8 +214,8 @@ export default function AiClassificationResultsPage() {
 
   if (error) {
     return (
-      <div className="page-container">
-        <div className="page-card">
+      <div className="page-container ai-results-page">
+        <div className="ai-results-panel">
           <h2>
             Unable to load AI results
           </h2>
@@ -225,7 +227,7 @@ export default function AiClassificationResultsPage() {
           {projectId && (
             <Link
               to={`/projects/${projectId}/requirements`}
-              className="btn btn-secondary"
+              className="button button-secondary"
             >
               Back to Requirements
             </Link>
@@ -240,7 +242,7 @@ export default function AiClassificationResultsPage() {
   }
 
   return (
-    <div className="page-container">
+    <div className="page-container ai-results-page">
       <div className="page-header">
         <div>
           <Link
@@ -266,7 +268,7 @@ export default function AiClassificationResultsPage() {
         </div>
       </div>
 
-      <div className="summary-grid">
+      <div className="dashboard-stats">
         <SummaryCard
           icon={
             <Brain
@@ -275,7 +277,7 @@ export default function AiClassificationResultsPage() {
           }
           label="AI Classified"
           value={
-            data.totalRequirements
+            data.results.length
           }
         />
 
@@ -318,7 +320,7 @@ export default function AiClassificationResultsPage() {
         />
       </div>
 
-      <div className="page-card">
+      <div className="ai-results-panel">
         <div className="ai-results-toolbar">
           <div>
             <h2>
@@ -334,14 +336,15 @@ export default function AiClassificationResultsPage() {
             </p>
           </div>
 
-          <div className="filter-buttons">
+          <div className="filter-buttons" role="group" aria-label="Filter classifications">
             <button
               type="button"
               className={
                 filter === "all"
-                  ? "btn btn-primary"
-                  : "btn btn-secondary"
+                  ? "button button-primary"
+                  : "button button-secondary"
               }
+              aria-pressed={filter === "all"}
               onClick={() =>
                 setFilter(
                   "all"
@@ -355,9 +358,10 @@ export default function AiClassificationResultsPage() {
               type="button"
               className={
                 filter === "hazard"
-                  ? "btn btn-primary"
-                  : "btn btn-secondary"
+                  ? "button button-primary"
+                  : "button button-secondary"
               }
+              aria-pressed={filter === "hazard"}
               onClick={() =>
                 setFilter(
                   "hazard"
@@ -371,9 +375,10 @@ export default function AiClassificationResultsPage() {
               type="button"
               className={
                 filter === "not-hazard"
-                  ? "btn btn-primary"
-                  : "btn btn-secondary"
+                  ? "button button-primary"
+                  : "button button-secondary"
               }
+              aria-pressed={filter === "not-hazard"}
               onClick={() =>
                 setFilter(
                   "not-hazard"
@@ -387,19 +392,24 @@ export default function AiClassificationResultsPage() {
               type="button"
               className={
                 filter === "low-confidence"
-                  ? "btn btn-primary"
-                  : "btn btn-secondary"
+                  ? "button button-primary"
+                  : "button button-secondary"
               }
+              aria-pressed={filter === "low-confidence"}
               onClick={() =>
                 setFilter(
                   "low-confidence"
                 )
               }
             >
-              Low Confidence
+              Low Confidence (&lt;70%)
             </button>
           </div>
         </div>
+
+        <p className="ai-results-count" role="status">
+          Showing {filteredResults.length} of {data.results.length} classifications
+        </p>
 
         {data.results.length === 0 ? (
           <div className="empty-state">
@@ -416,12 +426,20 @@ export default function AiClassificationResultsPage() {
               requirements page first.
             </p>
           </div>
+        ) : filteredResults.length === 0 ? (
+          <div className="empty-state" role="status">
+            <ShieldCheck size={36} aria-hidden="true" />
+            <h3>No matching classifications</h3>
+            <p>There are no results for this filter.</p>
+            <button type="button" className="button button-secondary" onClick={() => setFilter("all")}>
+              Show all results
+            </button>
+          </div>
         ) : (
-          <div className="ai-results-list">
+          <div className="requirements-list">
             {filteredResults.map(
               (
-                result,
-                index
+                result
               ) => (
                 <AiResultCard
                   key={
@@ -431,7 +449,7 @@ export default function AiClassificationResultsPage() {
                     result
                   }
                   index={
-                    index
+                    data.results.findIndex(item => item.requirementId === result.requirementId)
                   }
                   formatConfidence={
                     formatConfidence
@@ -452,7 +470,7 @@ export default function AiClassificationResultsPage() {
 
             <div>
               <h2>
-                AI Classification Complete
+                Compare Human and AI Classifications
               </h2>
 
               <p>
@@ -466,7 +484,7 @@ export default function AiClassificationResultsPage() {
 
           <button
             type="button"
-            className="btn btn-primary"
+            className="button button-primary"
             onClick={
               handleRunAnalysis
             }
@@ -493,17 +511,17 @@ function SummaryCard({
   value
 }: SummaryCardProps) {
   return (
-    <div className="summary-card">
+    <div className="stat-card ai-summary-card">
       <div className="summary-icon">
         {icon}
       </div>
 
       <div>
-        <div className="summary-label">
+        <div className="stat-label">
           {label}
         </div>
 
-        <div className="summary-value">
+        <div className="stat-value">
           {value}
         </div>
       </div>
@@ -526,8 +544,8 @@ function AiResultCard({
   formatConfidence
 }: AiResultCardProps) {
   return (
-    <div className="ai-result-card">
-      <div className="ai-result-header">
+    <div className="requirement-list-card ai-result-card">
+      <div className="requirement-list-header">
         <div>
           <span className="requirement-sequence">
             Requirement{" "}
@@ -543,8 +561,8 @@ function AiResultCard({
         <span
           className={
             result.isHazard
-              ? "classification-badge hazard"
-              : "classification-badge not-hazard"
+              ? "classification-badge ai-badge-hazard"
+              : "classification-badge ai-badge-safe"
           }
         >
           {result.isHazard
@@ -553,7 +571,7 @@ function AiResultCard({
         </span>
       </div>
 
-      <div className="ai-result-requirement">
+      <div className="requirement-text-box">
         {result.requirementText}
       </div>
 
@@ -596,7 +614,7 @@ function AiResultCard({
 
       <div className="ai-explanation">
         <span className="detail-label">
-          AI Explanation
+          <Sparkles size={15} aria-hidden="true" /> AI Explanation
         </span>
 
         <p>

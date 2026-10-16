@@ -31,6 +31,8 @@ import {
   useAuth,
 } from "../contexts/AuthContext";
 
+import { getAiClassificationResults } from "../api/aiClassificationApi";
+
 import type {
   RequirementDocument,
 } from "../types/document";
@@ -130,6 +132,62 @@ export default function RequirementsPage() {
     );
 
   const navigate = useNavigate();
+
+  const [randomizing, setRandomizing] = useState(false);
+  const [aiTracking, setAiTracking] = useState<{
+    projectId: string;
+    userId: string;
+    requirementIds: string[];
+    previousTimestamps: Map<string, string>;
+  } | null>(null);
+  const [aiCompletedCount, setAiCompletedCount] = useState(0);
+  const [aiProgressUnavailable, setAiProgressUnavailable] = useState(false);
+  const aiTotalCount = aiTracking?.requirementIds.length ?? requirements.length;
+  const aiPercent = aiTotalCount > 0
+    ? Math.floor((aiCompletedCount / aiTotalCount) * 100)
+    : 0;
+
+  useEffect(() => {
+    if (!runningAi || !aiTracking || aiTracking.projectId !== projectId) {
+      return;
+    }
+
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const tracking = aiTracking;
+
+    async function pollProgress() {
+      try {
+        const snapshot = await getAiClassificationResults(
+          tracking.projectId,
+          tracking.userId,
+          { signal: controller.signal, timeout: 10000 }
+        );
+        if (controller.signal.aborted) return;
+
+        // Count only new or updated results for this run's requirements.
+        const updatedIds = new Set(snapshot.results
+          .filter(result => result.classifiedAtUtc &&
+            result.classifiedAtUtc !== tracking.previousTimestamps.get(result.requirementId))
+          .map(result => result.requirementId));
+        const completed = tracking.requirementIds.filter(id => updatedIds.has(id)).length;
+        setAiCompletedCount(current => Math.max(current, completed));
+        setAiProgressUnavailable(false);
+      } catch {
+        if (!controller.signal.aborted) setAiProgressUnavailable(true);
+      } finally {
+        if (!controller.signal.aborted) {
+          timer = setTimeout(pollProgress, 3000);
+        }
+      }
+    }
+
+    timer = setTimeout(pollProgress, 3000);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [runningAi, aiTracking, projectId]);
 
   useEffect(
     () => {
@@ -366,7 +424,62 @@ export default function RequirementsPage() {
     }
   }
 
+  async function handleRandomizeClassifications() {
+    if (!user || !projectId || randomizing || savingId || runningAi) {
+      return;
+    }
+
+    setRandomizing(true);
+    setError(null);
+    setMessage(null);
+
+    let savedCount = 0;
+    let failedCount = 0;
+
+    try {
+      for (const requirement of requirements) {
+        try {
+          const result = await classifyRequirement(requirement.id, {
+            userId: user.id,
+            isHazard: Math.random() < 0.5,
+          });
+
+          setRequirements((current) =>
+            current.map((item) =>
+              item.id === requirement.id
+                ? {
+                    ...item,
+                    humanIsHazard: result.isHazard,
+                    humanClassifiedAtUtc: result.classifiedAtUtc,
+                  }
+                : item
+            )
+          );
+          savedCount += 1;
+        } catch {
+          failedCount += 1;
+        }
+      }
+
+      if (failedCount > 0) {
+        setError(
+          `Random classifications saved for ${savedCount} requirement(s). ` +
+            `${failedCount} requirement(s) could not be saved. Please try again.`
+        );
+      } else {
+        setMessage(`Random classifications saved for all ${savedCount} requirement(s).`);
+      }
+
+      setProgress(await getClassificationProgress(projectId, user.id));
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Classifications were processed, but progress could not be refreshed. Please reload the page."));
+    } finally {
+      setRandomizing(false);
+    }
+  }
+
   async function handleRunAi() {
+    if (runningAi || randomizing || savingId !== null) return;
     if (
       !projectId ||
       !user
@@ -388,6 +501,22 @@ export default function RequirementsPage() {
       setRunningAi(true);
       setError(null);
       setMessage(null);
+      setAiTracking(null);
+      setAiCompletedCount(0);
+      setAiProgressUnavailable(false);
+
+      try {
+        const existing = await getAiClassificationResults(projectId, user.id, { timeout: 10000 });
+        setAiTracking({
+          projectId,
+          userId: user.id,
+          requirementIds: requirements.map(requirement => requirement.id),
+          previousTimestamps: new Map(existing.results.map(result => [result.requirementId, result.classifiedAtUtc])),
+        });
+      } catch {
+        // Classification can still run if the results endpoint is unavailable.
+        setAiProgressUnavailable(true);
+      }
 
       const result =
         await runAiClassification(
@@ -430,6 +559,7 @@ export default function RequirementsPage() {
       setRunningAi(
         false
       );
+      setAiTracking(null);
     }
   }
 
@@ -527,6 +657,13 @@ export default function RequirementsPage() {
           }}
         >
           <Link
+            to={`/projects/${projectId}/ai-results`}
+            className="button button-secondary"
+          >
+            View AI Results
+          </Link>
+
+          <Link
             to={`/projects/${projectId}/upload`}
             className="button button-secondary"
           >
@@ -586,8 +723,9 @@ export default function RequirementsPage() {
             Upload PDF
           </Link>
         </div>
-      ) : requirements.length ===
-        0 ? (
+      ) : null}
+
+      {documents.some(document => document.requirementCount === 0) && (
         /* ==================================
            Documents exist, but no
            requirements have been extracted
@@ -611,7 +749,7 @@ export default function RequirementsPage() {
           <div
             className="requirements-list"
           >
-            {documents.map(
+            {documents.filter(document => document.requirementCount === 0).map(
               (
                 document
               ) => (
@@ -692,7 +830,7 @@ export default function RequirementsPage() {
                       type="button"
                       className="button button-primary"
                       disabled={
-                        extracting
+                        extracting || savingId !== null || randomizing || runningAi
                       }
                       onClick={() =>
                         handleExtractRequirements(
@@ -749,7 +887,9 @@ export default function RequirementsPage() {
             </Link>
           </div>
         </div>
-      ) : (
+      )}
+
+      {requirements.length > 0 && (
         <>
           {/* ==================================
               Progress
@@ -888,6 +1028,19 @@ export default function RequirementsPage() {
               remain hidden during this
               phase.
             </p>
+
+            <button
+              type="button"
+              className="button button-secondary"
+              disabled={randomizing || savingId !== null || runningAi || !user}
+              onClick={handleRandomizeClassifications}
+            >
+              {randomizing ? "Randomizing Classifications..." : "Randomize All (Debug)"}
+            </button>
+            <p>
+              Randomly assigns and saves Hazard or Not Hazard for every requirement,
+              replacing existing classifications.
+            </p>
           </div>
 
           {/* ==================================
@@ -930,6 +1083,9 @@ export default function RequirementsPage() {
                               "0"
                             )}`}
                         </h3>
+                        <p className="page-subtitle">
+                          Source: {documents.find(document => document.id === requirement.documentId)?.fileName ?? "Unknown document"}
+                        </p>
                       </div>
 
                       {requirement
@@ -982,7 +1138,7 @@ export default function RequirementsPage() {
                           }`
                         }
                         disabled={
-                          isSaving
+                          savingId !== null || randomizing || runningAi
                         }
                         onClick={() =>
                           handleClassification(
@@ -1005,7 +1161,7 @@ export default function RequirementsPage() {
                           }`
                         }
                         disabled={
-                          isSaving
+                          savingId !== null || randomizing || runningAi
                         }
                         onClick={() =>
                           handleClassification(
@@ -1086,7 +1242,7 @@ export default function RequirementsPage() {
                     type="button"
                     className="button button-primary"
                     disabled={
-                      runningAi
+                      runningAi || randomizing || savingId !== null
                     }
                     onClick={
                       handleRunAi
@@ -1108,6 +1264,44 @@ export default function RequirementsPage() {
                     </Link>
                   )}
                 </div>
+                {runningAi && (
+                  <div className="classification-progress-card" style={{ marginTop: "20px" }}>
+                    <div className="classification-progress-header">
+                      <div>
+                        <span className="classification-progress-label">AI Classification Progress</span>
+                        <div role="status" style={{ marginTop: "6px" }}>
+                          {aiTracking
+                            ? `${aiCompletedCount} of ${aiTotalCount} requirements classified${aiProgressUnavailable ? " (last confirmed)" : ""}`
+                            : aiProgressUnavailable
+                              ? "AI classification is running. Live progress is unavailable."
+                              : "Preparing AI classification..."}
+                        </div>
+                      </div>
+                      {aiTracking && <strong className="classification-progress-percentage">{aiPercent}%</strong>}
+                    </div>
+                    {aiTracking && (
+                      <div
+                        className="progress-track"
+                        role="progressbar"
+                        aria-label="AI classification progress"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={aiPercent}
+                        aria-valuetext={`${aiCompletedCount} of ${aiTotalCount} requirements classified`}
+                      >
+                        <div className="progress-value" style={{ width: `${aiPercent}%` }} />
+                      </div>
+                    )}
+                    {aiTracking && aiProgressUnavailable && (
+                      <p>Progress updates are temporarily unavailable. Retrying automatically.</p>
+                    )}
+                    {aiTracking && !aiProgressUnavailable && (
+                      <p>{aiPercent === 100
+                        ? "All results are saved. Finishing classification..."
+                        : "Checking for saved classifications every few seconds. Results will open when classification finishes."}</p>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </div>
