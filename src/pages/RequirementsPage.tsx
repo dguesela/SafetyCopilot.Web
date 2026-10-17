@@ -1029,7 +1029,7 @@ export default function RequirementsPage() {
               phase.
             </p>
 
-            <button
+            {/* <button
               type="button"
               className="button button-secondary"
               disabled={randomizing || savingId !== null || runningAi || !user}
@@ -1040,7 +1040,7 @@ export default function RequirementsPage() {
             <p>
               Randomly assigns and saves Hazard or Not Hazard for every requirement,
               replacing existing classifications.
-            </p>
+            </p> */}
           </div>
 
           {/* ==================================

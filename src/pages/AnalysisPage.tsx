@@ -159,6 +159,14 @@ export default function AnalysisPage() {
     );
   }
 
+  // Hazard is the positive class; the human labels are the comparison reference.
+  const truePositives = analysis.hazardAgreementCount;
+  const falsePositives = analysis.aiOnlyHazardCount;
+  const falseNegatives = analysis.humanOnlyHazardCount;
+  const precisionDenominator = truePositives + falsePositives;
+  const recallDenominator = truePositives + falseNegatives;
+  const f1Denominator = 2 * truePositives + falsePositives + falseNegatives;
+
   return (
     <div className="page-container">
       <div className="page-header">
@@ -403,6 +411,17 @@ export default function AnalysisPage() {
           </div>
         </div>
 
+        <div className="research-protocol-banner">
+          <strong>Metrics relative to human classifications</strong>
+          <p>
+            The human classifications are the reference for these calculations,
+            not verified ground truth. These metrics describe how closely the AI
+            reproduces those judgments, not independently verified hazard-detection
+            accuracy. Hazard is the positive class; true positives (TP) are
+            requirements both the human and AI labeled Hazard.
+          </p>
+        </div>
+
         <div className="analysis-interpretation-grid">
           <div className="interpretation-card">
             <strong>
@@ -423,6 +442,20 @@ export default function AnalysisPage() {
               for which the human and AI
               produced the same binary
               classification.
+            </p>
+          </div>
+
+          <div className="interpretation-card">
+            <strong>Disagreement Rate</strong>
+            <span>
+              {formatMetric(
+                analysis.humanOnlyHazardCount + analysis.aiOnlyHazardCount,
+                analysis.agreementCount + analysis.humanOnlyHazardCount + analysis.aiOnlyHazardCount
+              )}
+            </span>
+            <p>
+              Percentage of compared requirements for which the human and AI
+              produced different binary classifications.
             </p>
           </div>
 
@@ -459,6 +492,49 @@ export default function AnalysisPage() {
               Requirements classified as
               Hazard by the AI but Not
               Hazard by the human.
+            </p>
+          </div>
+          <div className="interpretation-card">
+            <strong>False Positives (FP)</strong>
+            <span>{falsePositives}</span>
+            <p>
+              AI labeled Hazard; human labeled Not Hazard. These are additional
+              AI hazard flags relative to the human classifications.
+            </p>
+          </div>
+          <div className="interpretation-card">
+            <strong>False Negatives (FN)</strong>
+            <span>{falseNegatives}</span>
+            <p>
+              AI labeled Not Hazard; human labeled Hazard. These are human-labeled
+              hazards the AI did not flag.
+            </p>
+          </div>
+          <div className="interpretation-card">
+            <strong>Precision</strong>
+            <span>{formatMetric(truePositives, precisionDenominator)}</span>
+            <p>
+              Of the requirements the AI labeled Hazard, the percentage also
+              labeled Hazard by the human. TP / (TP + FP).
+              {precisionDenominator === 0 && " N/A: the AI labeled no requirements as hazards."}
+            </p>
+          </div>
+          <div className="interpretation-card">
+            <strong>Recall</strong>
+            <span>{formatMetric(truePositives, recallDenominator)}</span>
+            <p>
+              Of the requirements the human labeled Hazard, the percentage also
+              labeled Hazard by the AI. TP / (TP + FN).
+              {recallDenominator === 0 && " N/A: the human labeled no requirements as hazards."}
+            </p>
+          </div>
+          <div className="interpretation-card">
+            <strong>F1-score</strong>
+            <span>{formatMetric(2 * truePositives, f1Denominator)}</span>
+            <p>
+              Balances precision and recall relative to the human classifications.
+              2TP / (2TP + FP + FN).
+              {f1Denominator === 0 && " N/A: neither the human nor the AI labeled any requirements as hazards."}
             </p>
           </div>
         </div>
@@ -599,4 +675,9 @@ function formatCategory(
     default:
       return category;
   }
+}
+function formatMetric(numerator: number, denominator: number): string {
+  return denominator === 0
+    ? "N/A"
+    : `${((numerator / denominator) * 100).toFixed(2)}%`;
 }
